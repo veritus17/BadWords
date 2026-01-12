@@ -25,7 +25,7 @@ Automatically detect and/or remove **bad takes**, **silence**, and **filler word
 
 ### **1\) Download**
 
-Go to the releases folder and download files from the newest one, then put them in one folder
+Go to the releases folder and download files from desired version, then put them in one folder on your PC
 
 ### **2\) Run the Installer**
 
