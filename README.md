@@ -1,6 +1,6 @@
 # **BadWords – Cleaner Timelines, Faster.**
 
-Automatically detect and/or remove **bad takes**, **silence**, and **filler words** in DaVinci Resolve using OpenAI Whisper. Designed specifically for **Linux**.
+Automatically detect and/or remove **filler words**, **silence**, and **bad takes** in DaVinci Resolve using OpenAI Whisper. Designed specifically for **Linux**.
 
 ### **🐧 Linux SIMPLE Setup Instructions Down Below**
 
