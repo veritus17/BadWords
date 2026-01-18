@@ -25,7 +25,7 @@ Automatically detect and/or remove **filler words**, **silence**, and **bad take
 
 ### **1\) Download**
 
-Click 👉️ [here](https://github.com/veritus17/BadWords/releases/download/BadWords-fix/BadWords.hotfix.1.1.zip) 👈️ to download the latest release .zip package, and extract it into a folder
+Click 👉️ [here](https://github.com/veritus17/BadWords/releases/download/BadWords-v1.0.2/BadWords.1.0.2.zip) 👈️ to download the latest release .zip package, and extract it into a folder
 
 ### **2\) Run the Installer**
 
