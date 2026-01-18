@@ -22,13 +22,13 @@ APP_NAME="BadWords"
 INSTALL_DIR="$HOME/.local/share/$APP_NAME"
 SOURCE_FOLDER_NAME="source"
 WRAPPER_NAME="BadWords (Linux).py"
-EXTRA_ENV_VARS="" # Stores GPU-specific env vars for the wrapper
+EXTRA_ENV_VARS=""
 
 echo -e "${BLUE}=================================================${NC}"
 echo -e "${BLUE}           BadWords - INSTALLER (Linux)          ${NC}"
 echo -e "${BLUE}=================================================${NC}"
 
-# 1. Source Folder Verification
+# 1. Weryfikacja folderu źródłowego
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SOURCE_PATH="$DIR/$SOURCE_FOLDER_NAME"
 
@@ -42,21 +42,20 @@ if [ ! -f "$SOURCE_PATH/main.py" ]; then
     exit 1
 fi
 
-# 2. System Dependencies & Python Version Check
+# 2. Zależności systemowe i sprawdzanie wersji Pythona
 echo -e "${YELLOW}[INFO] Checking system dependencies...${NC}"
 
-TARGET_PYTHON="python3" # Default system python
+TARGET_PYTHON="python3" # Domyślny systemowy
 
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     
-    # Check current python version
-    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-    echo -e "${CYAN}[SYSTEM] Detected Python $PY_VER${NC}"
-
-    # IF PYTHON IS TOO NEW (3.13+), FORCE INSTALL 3.11 FOR COMPATIBILITY
-    if (( $(echo "$PY_VER >= 3.13" | bc -l) )); then
-        echo -e "${RED}[WARNING] Python $PY_VER is too new for stable GPU libraries.${NC}"
+    # Sprawdź wersję Pythona (BEZ użycia 'bc', czysty Python)
+    IS_TOO_NEW=$(python3 -c "import sys; print(1 if sys.version_info >= (3, 13) else 0)")
+    
+    if [ "$IS_TOO_NEW" -eq 1 ]; then
+        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        echo -e "${RED}[WARNING] Python $PY_VER detected (Too new for stable GPU libraries).${NC}"
         echo -e "${YELLOW}[FIX] Attempting to install Python 3.11 parallel environment...${NC}"
         
         if [[ "$ID" == "fedora" || "$ID" == "rhel" || "$ID_LIKE" == *"fedora"* ]]; then
@@ -71,13 +70,14 @@ if [ -f /etc/os-release ]; then
         if [ -f "$TARGET_PYTHON" ]; then
             echo -e "${GREEN}[SUCCESS] Will use $TARGET_PYTHON for Whisper environment.${NC}"
         else
-            echo -e "${RED}[ERROR] Failed to install Python 3.11. GPU support might fail on 3.13.${NC}"
-            # Fallback to system python
+            echo -e "${RED}[ERROR] Failed to install Python 3.11. Whisper might fail on CPU/GPU.${NC}"
             TARGET_PYTHON="python3"
         fi
+    else
+        echo -e "${GREEN}[OK] System Python is compatible.${NC}"
     fi
 
-    # Install standard dependencies
+    # Instalacja standardowych narzędzi
     if [[ "$ID_LIKE" == *"debian"* || "$ID" == "debian" ]]; then
         sudo apt update
         sudo apt install -y python3-tk ffmpeg python3-pip pipx curl python3-venv
@@ -90,16 +90,15 @@ fi
 
 pipx ensurepath > /dev/null 2>&1 || true
 
-# 3. Clean Install & Create Directory
+# 3. Instalacja Plików Aplikacji (Czysta instalacja)
 echo -e "${YELLOW}[INFO] Preparing installation directory: $INSTALL_DIR${NC}"
 
 if [ -d "$INSTALL_DIR" ]; then
-    # We clean only the app files, config stays in .config
     rm -rf "$INSTALL_DIR"
 fi
 mkdir -p "$INSTALL_DIR"
 
-# 4. AI Engine Installation (GPU)
+# 4. Konfiguracja Silnika AI (GPU)
 echo -e "\n${CYAN}--- AI ENGINE SETUP ---${NC}"
 echo "Select GPU type for hardware acceleration:"
 echo ""
@@ -112,14 +111,16 @@ read -p "Select [1-4]: " gpu_choice
 echo -e "${YELLOW}[INFO] Verifying Whisper environment...${NC}"
 
 # --- SMART WHISPER INSTALL ---
+# Sprawdzamy czy Whisper jest zainstalowany i czy na dobrej wersji Pythona
 NEED_BASE_INSTALL=true
 
 if pipx list | grep -q "package openai-whisper"; then
-    # Check if installed with correct python version
+    # Pobieramy wersję pythona wewnątrz venv whispera
     CUR_ENV_PY=$(pipx runpip openai-whisper -- python --version 2>&1 | awk '{print $2}')
+    # Pobieramy wersję docelowego pythona
     TARGET_ENV_PY=$($TARGET_PYTHON --version 2>&1 | awk '{print $2}')
     
-    # We only match Major.Minor (e.g. 3.11) to be safe, but exact match is fine too
+    # Porównujemy Major.Minor (np. 3.11)
     if [[ "$CUR_ENV_PY" == "$TARGET_ENV_PY"* ]]; then
         echo -e "${GREEN}[OK] Whisper base is already installed on Python $CUR_ENV_PY.${NC}"
         NEED_BASE_INSTALL=false
@@ -129,10 +130,12 @@ if pipx list | grep -q "package openai-whisper"; then
 fi
 
 if [ "$NEED_BASE_INSTALL" = true ]; then
-    pipx install openai-whisper --python "$TARGET_PYTHON" --force
+    #pipx install openai-whisper --python "$TARGET_PYTHON" --force
+    pipx reinstall openai-whisper --python python3
 fi
 
 # --- SMART LIBRARY SWAP FUNCTION ---
+# Funkcja sprawdzająca wersję Torcha wewnątrz venv i podmieniająca tylko w razie potrzeby
 ensure_torch_version() {
     local required_tag="$1"
     local index_url="$2"
@@ -140,7 +143,7 @@ ensure_torch_version() {
 
     echo "Checking Torch version (Require: $required_tag)..."
     
-    # Get version string from pipx environment
+    # Pobierz info o zainstalowanym torchu w pipx
     local current_ver=$(pipx runpip openai-whisper show torch 2>/dev/null | grep Version)
     
     if [[ "$current_ver" == *"$required_tag"* ]]; then
@@ -148,13 +151,13 @@ ensure_torch_version() {
     else
         echo -e "${YELLOW}[UPDATE] Torch mismatch or missing ($current_ver). Installing $required_tag...${NC}"
         
-        # Remove old to prevent conflicts
-        pipx runpip openai-whisper uninstall -y torch torchvision torchaudio
+        # Bezpieczne odinstalowanie starej wersji (z || true żeby nie wywaliło skryptu)
+        echo "Cleaning old libraries..."
+        pipx runpip openai-whisper uninstall -y torch torchvision torchaudio || true
         
-        # Install new
+        # Instalacja nowej wersji
         local install_cmd="pipx runpip openai-whisper install torch torchvision torchaudio --index-url $index_url"
         if [ "$full_reinstall" = "true" ]; then
-             # Sometimes needed for ROCm to overwrite CPU defaults properly
              install_cmd="$install_cmd --force-reinstall"
         fi
         
@@ -173,7 +176,7 @@ elif [ "$gpu_choice" == "2" ]; then
 
 elif [ "$gpu_choice" == "3" ]; then
     echo -e "${BLUE}[AMD] Ensuring ROCm 6.1 libraries...${NC}"
-    # Use 'rocm' as search tag, but install from rocm6.1 index
+    # Używamy tagu 'rocm', ale instalujemy z indexu rocm6.1
     ensure_torch_version "rocm" "https://download.pytorch.org/whl/rocm6.1" "false"
 
     # --- AMD COMPATIBILITY FIX ---
@@ -182,7 +185,7 @@ elif [ "$gpu_choice" == "3" ]; then
     echo "Consumer cards (RX 6000/7000) REQUIRE a specific override to work on Linux."
     echo "If you have an RX 6600/6700/6800/6900/7800/7900, type 'y'."
     read -p "Apply HSA_OVERRIDE_GFX_VERSION=10.3.0? [Y/n]: " amd_override
-    amd_override=${amd_override:-y} # Default to yes
+    amd_override=${amd_override:-y} # Domyślnie Tak
     
     if [[ "$amd_override" =~ ^[Yy]$ ]]; then
         EXTRA_ENV_VARS="os.environ['HSA_OVERRIDE_GFX_VERSION'] = '10.3.0'"
@@ -191,21 +194,19 @@ elif [ "$gpu_choice" == "3" ]; then
 
 else
     echo -e "${YELLOW}[CPU] Using standard installation.${NC}"
-    # If we are on CPU mode, standard whisper install implies CPU torch, usually no suffix or +cpu
-    # We generally don't need to force anything here unless they downgraded from GPU.
-    # But for safety, we assume if they picked CPU, they want stability.
 fi
 
-# 4b. Helper Libraries (pypdf)
+# 4b. Biblioteki Pomocnicze (pypdf) - PEP 668 COMPLIANT
 echo -e "${YELLOW}[INFO] Installing helper libraries (pypdf)...${NC}"
-# Use --break-system-packages to handle PEP 668 on recent distros for user-scope tools
+# Próba instalacji z flagą --break-system-packages (dla nowych pip), fallback do zwykłej (dla starych)
+# Przekierowanie stderr do null przy pierwszej próbie, aby nie straszyć użytkownika błędem
 pip3 install --user --upgrade pypdf --break-system-packages 2>/dev/null || pip3 install --user pypdf
 
-# 5. Copy Application Files
+# 5. Kopiowanie Plików
 echo -e "${YELLOW}[INFO] Copying application files...${NC}"
 cp -r "$SOURCE_PATH/"* "$INSTALL_DIR/"
 
-# 6. Create Resolve Script Wrapper
+# 6. Tworzenie Wrappera dla DaVinci
 RESOLVE_SCRIPT_DIR=""
 
 if [ -d "/opt/resolve/Developer/Scripting/Modules/" ]; then
