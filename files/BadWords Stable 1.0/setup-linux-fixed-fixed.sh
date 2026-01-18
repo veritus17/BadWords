@@ -34,9 +34,6 @@ SOURCE_PATH="$DIR/$SOURCE_FOLDER_NAME"
 
 if [ ! -d "$SOURCE_PATH" ]; then
     echo -e "${RED}[ERROR] Folder '$SOURCE_FOLDER_NAME' not found!${NC}"
-    echo "Ensure the file structure looks like this:"
-    echo "  - $0 (this script)"
-    echo "  - $SOURCE_FOLDER_NAME/ (folder containing main.py, gui.py, etc.)"
     exit 1
 fi
 
@@ -45,54 +42,61 @@ if [ ! -f "$SOURCE_PATH/main.py" ]; then
     exit 1
 fi
 
-# 2. System Dependencies (RESTORED ROBUST INSTALLATION)
-echo -e "${YELLOW}[INFO] Checking and installing system dependencies...${NC}"
+# 2. System Dependencies & Python Version Check
+echo -e "${YELLOW}[INFO] Checking system dependencies...${NC}"
+
+TARGET_PYTHON="python3" # Default system python
 
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     
-    if [[ "$ID_LIKE" == *"debian"* || "$ID" == "debian" ]]; then
-        # Ubuntu, Debian, Pop!_OS, Mint
-        echo -e "${CYAN}[DEBIAN/UBUNTU] Installing dependencies via apt...${NC}"
-        sudo apt update
-        sudo apt install -y python3 python3-tk ffmpeg python3-pip pipx curl python3-venv
+    # Check current python version
+    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    echo -e "${CYAN}[SYSTEM] Detected Python $PY_VER${NC}"
+
+    # IF PYTHON IS TOO NEW (3.13+), FORCE INSTALL 3.11 FOR COMPATIBILITY
+    if (( $(echo "$PY_VER >= 3.13" | bc -l) )); then
+        echo -e "${RED}[WARNING] Python $PY_VER is too new for stable GPU libraries.${NC}"
+        echo -e "${YELLOW}[FIX] Attempting to install Python 3.11 parallel environment...${NC}"
         
-    elif [[ "$ID" == "fedora" || "$ID" == "rhel" || "$ID_LIKE" == *"fedora"* ]]; then
-        # Fedora
-        echo -e "${CYAN}[FEDORA] Installing dependencies via dnf...${NC}"
-        sudo dnf install -y python3 python3-tkinter ffmpeg pipx curl
+        if [[ "$ID" == "fedora" || "$ID" == "rhel" || "$ID_LIKE" == *"fedora"* ]]; then
+            sudo dnf install -y python3.11 python3.11-tkinter
+            TARGET_PYTHON="/usr/bin/python3.11"
+        elif [[ "$ID_LIKE" == *"debian"* || "$ID" == "debian" ]]; then
+            sudo apt update
+            sudo apt install -y python3.11 python3.11-venv python3.11-tk
+            TARGET_PYTHON="/usr/bin/python3.11"
+        fi
         
-    elif [[ "$ID_LIKE" == *"arch"* ]]; then
-        # Arch, Manjaro
-        echo -e "${CYAN}[ARCH] Installing dependencies via pacman...${NC}"
-        sudo pacman -S --noconfirm python python-tk ffmpeg python-pipx curl
-        
-    else
-        echo -e "${RED}[WARNING] Unknown distro '$ID'. Please ensure Python3, Tkinter, FFmpeg and pipx are installed manually.${NC}"
+        if [ -f "$TARGET_PYTHON" ]; then
+            echo -e "${GREEN}[SUCCESS] Will use $TARGET_PYTHON for Whisper environment.${NC}"
+        else
+            echo -e "${RED}[ERROR] Failed to install Python 3.11. GPU support might fail on 3.13.${NC}"
+            # Fallback to system python
+            TARGET_PYTHON="python3"
+        fi
     fi
-else
-    echo -e "${RED}[WARNING] Cannot detect OS. Please ensure dependencies are installed manually.${NC}"
+
+    # Install standard dependencies
+    if [[ "$ID_LIKE" == *"debian"* || "$ID" == "debian" ]]; then
+        sudo apt update
+        sudo apt install -y python3-tk ffmpeg python3-pip pipx curl python3-venv
+    elif [[ "$ID" == "fedora" || "$ID" == "rhel" || "$ID_LIKE" == *"fedora"* ]]; then
+        sudo dnf install -y python3-tkinter ffmpeg pipx curl
+    elif [[ "$ID_LIKE" == *"arch"* ]]; then
+        sudo pacman -S --noconfirm python-tk ffmpeg python-pipx curl
+    fi
 fi
 
-# Ensure pipx is in path
 pipx ensurepath > /dev/null 2>&1 || true
-
-# Double check critical commands
-for cmd in python3 ffmpeg pipx; do
-    if ! command -v $cmd &> /dev/null; then
-        echo -e "${RED}[ERROR] Command '$cmd' not found even after installation attempt.${NC}"
-        exit 1
-    fi
-done
 
 # 3. Clean Install & Create Directory
 echo -e "${YELLOW}[INFO] Preparing installation directory: $INSTALL_DIR${NC}"
 
 if [ -d "$INSTALL_DIR" ]; then
-    echo -e "${CYAN}[CLEANUP] Removing old version at $INSTALL_DIR...${NC}"
+    # We clean only the app files, config stays in .config
     rm -rf "$INSTALL_DIR"
 fi
-
 mkdir -p "$INSTALL_DIR"
 
 # 4. AI Engine Installation (GPU)
@@ -101,61 +105,100 @@ echo "Select GPU type for hardware acceleration:"
 echo ""
 echo "1) NVIDIA (Standard - CUDA 12.x)"
 echo "2) NVIDIA (Compatibility - CUDA 11.8)"
-echo "3) AMD RADEON (ROCm 6.0 - STABLE)"
+echo "3) AMD RADEON (ROCm 6.1 - Latest Stable)"
 echo "4) CPU Only (Slow but Safe)"
 read -p "Select [1-4]: " gpu_choice
 
-echo -e "${YELLOW}[INFO] Installing Whisper base...${NC}"
+echo -e "${YELLOW}[INFO] Verifying Whisper environment...${NC}"
 
-# Uninstall old logic just in case
-pipx uninstall openai-whisper > /dev/null 2>&1 || true
+# --- SMART WHISPER INSTALL ---
+NEED_BASE_INSTALL=true
 
-# Force install standard version first
-pipx install openai-whisper --force
+if pipx list | grep -q "package openai-whisper"; then
+    # Check if installed with correct python version
+    CUR_ENV_PY=$(pipx runpip openai-whisper -- python --version 2>&1 | awk '{print $2}')
+    TARGET_ENV_PY=$($TARGET_PYTHON --version 2>&1 | awk '{print $2}')
+    
+    # We only match Major.Minor (e.g. 3.11) to be safe, but exact match is fine too
+    if [[ "$CUR_ENV_PY" == "$TARGET_ENV_PY"* ]]; then
+        echo -e "${GREEN}[OK] Whisper base is already installed on Python $CUR_ENV_PY.${NC}"
+        NEED_BASE_INSTALL=false
+    else
+        echo -e "${YELLOW}[UPDATE] Python mismatch ($CUR_ENV_PY vs $TARGET_ENV_PY). Reinstalling base...${NC}"
+    fi
+fi
+
+if [ "$NEED_BASE_INSTALL" = true ]; then
+    pipx install openai-whisper --python "$TARGET_PYTHON" --force
+fi
+
+# --- SMART LIBRARY SWAP FUNCTION ---
+ensure_torch_version() {
+    local required_tag="$1"
+    local index_url="$2"
+    local full_reinstall="$3"
+
+    echo "Checking Torch version (Require: $required_tag)..."
+    
+    # Get version string from pipx environment
+    local current_ver=$(pipx runpip openai-whisper show torch 2>/dev/null | grep Version)
+    
+    if [[ "$current_ver" == *"$required_tag"* ]]; then
+        echo -e "${GREEN}[OK] Correct Torch version detected ($current_ver). Skipping install.${NC}"
+    else
+        echo -e "${YELLOW}[UPDATE] Torch mismatch or missing ($current_ver). Installing $required_tag...${NC}"
+        
+        # Remove old to prevent conflicts
+        pipx runpip openai-whisper uninstall -y torch torchvision torchaudio
+        
+        # Install new
+        local install_cmd="pipx runpip openai-whisper install torch torchvision torchaudio --index-url $index_url"
+        if [ "$full_reinstall" = "true" ]; then
+             # Sometimes needed for ROCm to overwrite CPU defaults properly
+             install_cmd="$install_cmd --force-reinstall"
+        fi
+        
+        echo "Running: $install_cmd"
+        eval $install_cmd
+    fi
+}
 
 if [ "$gpu_choice" == "1" ]; then
-    echo -e "${BLUE}[NVIDIA] Installing CUDA 12.x libraries...${NC}"
-    pipx runpip openai-whisper uninstall torch torchvision torchaudio -y
-    pipx runpip openai-whisper install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    echo -e "${BLUE}[NVIDIA] Ensuring CUDA 12.x libraries...${NC}"
+    ensure_torch_version "+cu121" "https://download.pytorch.org/whl/cu121" "false"
     
 elif [ "$gpu_choice" == "2" ]; then
-    echo -e "${BLUE}[NVIDIA] Installing CUDA 11.8 libraries...${NC}"
-    pipx runpip openai-whisper uninstall torch torchvision torchaudio -y
-    pipx runpip openai-whisper install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    echo -e "${BLUE}[NVIDIA] Ensuring CUDA 11.8 libraries...${NC}"
+    ensure_torch_version "+cu118" "https://download.pytorch.org/whl/cu118" "false"
 
 elif [ "$gpu_choice" == "3" ]; then
-    echo -e "${BLUE}[AMD] Installing ROCm 6.0 libraries (Stable)...${NC}"
-    echo "This may take a while (downloading ~2-3GB)..."
-    
-    pipx runpip openai-whisper uninstall torch torchvision torchaudio -y
-    
-    # CHANGED: Downgraded from rocm6.1 to rocm6.0 for better stability on consumer cards
-    if ! pipx runpip openai-whisper install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0; then
-        echo -e "${RED}[ERROR] ROCm installation failed. Falling back to CPU...${NC}"
-        pipx runpip openai-whisper install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-    fi
+    echo -e "${BLUE}[AMD] Ensuring ROCm 6.1 libraries...${NC}"
+    # Use 'rocm' as search tag, but install from rocm6.1 index
+    ensure_torch_version "rocm" "https://download.pytorch.org/whl/rocm6.1" "false"
 
     # --- AMD COMPATIBILITY FIX ---
     echo ""
     echo -e "${YELLOW}AMD CONFIGURATION:${NC}"
-    echo "Consumer cards (RX 6000/7000) often require a GFX version override to work with ROCm."
+    echo "Consumer cards (RX 6000/7000) REQUIRE a specific override to work on Linux."
     echo "If you have an RX 6600/6700/6800/6900/7800/7900, type 'y'."
     read -p "Apply HSA_OVERRIDE_GFX_VERSION=10.3.0? [Y/n]: " amd_override
     amd_override=${amd_override:-y} # Default to yes
     
     if [[ "$amd_override" =~ ^[Yy]$ ]]; then
-        # This injects the variable into the python wrapper script
         EXTRA_ENV_VARS="os.environ['HSA_OVERRIDE_GFX_VERSION'] = '10.3.0'"
-        echo -e "${CYAN}[AMD] Override 10.3.0 applied to wrapper.${NC}"
+        echo -e "${CYAN}[AMD] Override 10.3.0 will be applied on launch.${NC}"
     fi
 
 else
-    echo -e "${YELLOW}[CPU] Keeping standard installation.${NC}"
+    echo -e "${YELLOW}[CPU] Using standard installation.${NC}"
+    # If we are on CPU mode, standard whisper install implies CPU torch, usually no suffix or +cpu
+    # We generally don't need to force anything here unless they downgraded from GPU.
+    # But for safety, we assume if they picked CPU, they want stability.
 fi
 
 # 4b. Helper Libraries (pypdf)
 echo -e "${YELLOW}[INFO] Installing helper libraries (pypdf)...${NC}"
-# Use pip3 install --user because the script runs as a Python module
+# Use --break-system-packages to handle PEP 668 on recent distros for user-scope tools
 pip3 install --user --upgrade pypdf --break-system-packages 2>/dev/null || pip3 install --user pypdf
 
 # 5. Copy Application Files
@@ -165,19 +208,16 @@ cp -r "$SOURCE_PATH/"* "$INSTALL_DIR/"
 # 6. Create Resolve Script Wrapper
 RESOLVE_SCRIPT_DIR=""
 
-# Try standard Linux path for Resolve Scripts
 if [ -d "/opt/resolve/Developer/Scripting/Modules/" ]; then
-    # Default location for scripts in Resolve
     RESOLVE_SCRIPT_DIR="$HOME/.local/share/DaVinciResolve/Configs/Scripts/Utility"
     if [ ! -d "$RESOLVE_SCRIPT_DIR" ]; then
         mkdir -p "$RESOLVE_SCRIPT_DIR"
     fi
 fi
 
-# Fallback or custom install check
 if [ -z "$RESOLVE_SCRIPT_DIR" ] || [ ! -d "$RESOLVE_SCRIPT_DIR" ]; then
     echo -e "${RED}[WARNING] Could not find DaVinci Resolve Script folder automatically.${NC}"
-    echo "Using current directory as fallback for the wrapper script."
+    echo "Using current directory as fallback."
     RESOLVE_SCRIPT_DIR="$DIR"
 else
     echo -e "${CYAN}[INFO] Found Resolve Script Dir: $RESOLVE_SCRIPT_DIR${NC}"
@@ -185,7 +225,6 @@ fi
 
 WRAPPER_PATH="$RESOLVE_SCRIPT_DIR/$WRAPPER_NAME"
 
-# Create wrapper setting sys.path AND environment variables
 cat > "$WRAPPER_PATH" <<EOF
 import sys
 import os
@@ -208,7 +247,6 @@ if os.path.exists(MAIN_SCRIPT):
         with open(MAIN_SCRIPT, "r", encoding="utf-8") as f:
             code = f.read()
         
-        # Set __file__ to main.py path
         global_vars = globals().copy()
         global_vars['__file__'] = MAIN_SCRIPT
         
@@ -230,9 +268,7 @@ echo -e "${GREEN}=================================================${NC}"
 # Verification log
 export PATH="$HOME/.local/bin:$PATH"
 if command -v whisper &> /dev/null; then
-    WHISPER_LOC=$(which whisper)
-    echo -e "${CYAN}[DEBUG] Whisper found at: $WHISPER_LOC${NC}"
-else
-    echo -e "${RED}[WARNING] Whisper executable not found in PATH!${NC}"
-    echo "You might need to restart your terminal or session."
+    echo -e "${CYAN}[VERIFICATION] Checking installed Torch version:${NC}"
+    pipx runpip openai-whisper list | grep torch || echo "Torch not found?"
+    echo -e "${CYAN}[DEBUG] Whisper found at: $(which whisper)${NC}"
 fi
