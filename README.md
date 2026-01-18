@@ -25,17 +25,17 @@ Automatically detect and/or remove **filler words**, **silence**, and **bad take
 
 ### **1\) Download**
 
-Go to the releases folder and download files from desired version, then put them in one folder on your PC
+Click 👉️ here 👈️ to download the latest release .zip package, and extract it into a folder
 
 ### **2\) Run the Installer**
 
 Open the folder in your terminal and run the setup script:
 
 **Make it executable**  
-chmod \+x setup-nvidia-amd-fix.sh
+chmod \+x setup-linux-nvidia-amd.sh
 
 **Run the installer**  
-./setup-nvidia-amd-fix.sh
+./setup-linux-nvidia-amd.sh
 
 The script will:
 
@@ -48,7 +48,7 @@ The script will:
 1. Open **DaVinci Resolve**.  
 2. Open your Project and Timeline.  
 3. Go to **Workspace → Scripts → BadWords**  
-4. Enjoy automated editing\!
+4. Enjoy easier editing\!
 
 ## **🛠️ Requirements**
 
