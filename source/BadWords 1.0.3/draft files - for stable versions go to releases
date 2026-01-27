@@ -2,3 +2,4 @@ changelog of 1.0.3:
 - russian lang added ✔️
 - change "generate" to "assemble" ✔️
 - safer linux installer (without --break-system-packages) ✔️
+- deleted some unwanted logical functions from gui.py and put them into algorythms.py and engine.py ✔️
