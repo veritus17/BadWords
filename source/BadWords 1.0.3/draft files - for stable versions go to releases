@@ -5,3 +5,4 @@ changelog of 1.0.3:
 - deleted some unwanted logical functions from gui.py and put them into algorythms.py and engine.py ✔️
 - made dynamic height of windows to get a more clean look ✔️
 - remade "Compund Clip Fix" option ✔️
+- fixed issue with timeline assembly (no error while working on audio-only timeline) ✔️
